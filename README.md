@@ -1,22 +1,43 @@
-# gemserve
+# microgem
 
-`gemserve` is a small libevent based gemini server. It is currently unfinished
+`microgem` is a small libevent based gemini server. It is currently unfinished
 but I project it will reach a usable state within the next decade.
+
+## Building
+
+Using meson as a build system:
+
+```
+meson builddir
+ninja -C builddir
+```
+
+## Running
+
+Currently accepts the following commandline parameters
+
+```
+-h hostname : hostname to serve (currently ignored).
+-b address  : address to listen on. 127.0.0.1 by default.
+-p port     : port to listen on. 1965 by default.
+-c certpath : path to tls certificate.
+-k keypath  : path to tls key.
+-s rootdir  : path to directory of files to serve.
+
+
+```
 
 
 ## Current capabilities
-It serves a single static file. That's it for now. I'm using it to serve my
-gemsite at [gemini://trfs.me/](gemini://trfs.me/).
+
+It currently serves static files out of a single directory. No less, no more.
 
 
-## Planned out
-The idea is to reach a point where I can have a tiny binary that I can point to
-a directory of `text/gemini` documents and have them served. No ambitions
-beyond that.
+## Missing features
 
-Immediate TODOS:
-* URI parsing
-* Routing
+Currently we're not really doing any real parsing of URLs, so we're not
+interpreting the authority section. That means microgem is not checking ports,
+domain, userinfo, all that jazz. That's probably the most pressing issue.
 
 
 ## Contributing

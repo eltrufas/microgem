@@ -15,11 +15,11 @@
 #include <event2/visibility.h>
 #include <event2/event-config.h>
 #include <event2/util.h>
-
 #include <openssl/ssl.h>
-
 #include <netinet/in.h>
 #include <arpa/inet.h>
+
+#include "url.h"
 
 extern int errno;
 extern char *optarg;
@@ -39,6 +39,7 @@ long int port;
 char certpath[MAX_PATH_LEN];
 char keypath[MAX_PATH_LEN];
 char rootdir[MAX_PATH_LEN];
+char path[MAX_PATH_LEN * 2];
 
 enum RequestState{
 	REQUEST_READING,
@@ -139,7 +140,7 @@ read_args(int argc, char **argv)
 	port = 1965;
 	strcpy(certpath, "./cert.pem");
 	strcpy(keypath, "./key.pem");
-	strcpy(rootdir, "./content.gmi");
+	strcpy(rootdir, "./content");
 
 	while ((opt = getopt(argc, argv, "b:h:p:c:k:d:")) != -1) {
 		switch (opt) {
@@ -190,11 +191,11 @@ handle_event(struct bufferevent *bev, short events, void *ctx)
 }
 
 void
-write_header(struct bufferevent *bev, char code, char* meta)
+write_header(struct evbuffer *bev, char code, char* meta)
 {
 	char header[1024];
 	uint32_t len = sprintf(header, "%d %s\r\n", code, meta);
-	bufferevent_write(bev, header, len);
+	evbuffer_add(bev, header, len);
 }
 
 void
@@ -220,28 +221,63 @@ write_response(struct bufferevent *bev, void *ctx)
 void
 read_request(struct bufferevent *bev, void *ctx)
 {
-		struct evbuffer *input;
-		char *line;
-		struct Request *req = ctx;
+	struct evbuffer *input;
+	struct evbuffer *output;
+	char *line;
+	struct Request *req = ctx;
 
-		if (req->state != REQUEST_READING) {
-			return;
-		}
+	if (req->state != REQUEST_READING) {
+		return;
+	}
 
-		input = bufferevent_get_input(bev);
+	input = bufferevent_get_input(bev);
+	output = bufferevent_get_output(bev);
 
-		line = evbuffer_readln(input, 0, EVBUFFER_EOL_CRLF);
+	line = evbuffer_readln(input, 0, EVBUFFER_EOL_CRLF);
 
-		if (line) {
-			req->request = line;
-			req->state = REQUEST_WRITING;
-			write_header(bev, 20, "text/gemini");
-			bufferevent_write(bev, res, reslen);
-		}
+	if (!line) {
+		return;
+	}
+
+	req->request = line;
+	req->state = REQUEST_WRITING;
+
+	struct URL url;
+	int ret = parse_url(line, &url);
+
+	if (ret == -1) {
+		write_header(output, 59, "Unable to parse uri");
+		return;
+	}
+
+	if (!relpath_is_safe(url.route)) {
+		write_header(output, 59, "Illegal path");
+		return;
+	}
+
+
+	strcpy(path, rootdir);
+	append_index(url.route);
+	strcat(path, url.route);
+	int filefd = open(path, O_RDONLY);
+	if (filefd == -1) {
+		write_header(output, 51, "File not found");
+		return;
+	}
+
+	off_t fsize;
+
+	fsize = lseek(filefd, 0, SEEK_END);
+	lseek(filefd, 0, SEEK_SET);
+
+	write_header(output, 20, "text/gemini");
+	evbuffer_add_file(output, filefd, 0, fsize);
+	bufferevent_write(bev, res, reslen);
 }
 
 void
-accept_conn(struct evconnlistener *serv, int sock, struct sockaddr *sa, int sa_len, void *arg)
+accept_conn(struct evconnlistener *serv, int sock, struct sockaddr *sa,
+		int sa_len, void *arg)
 {
 	struct bufferevent *bev;
 	struct event_base *base;
@@ -278,17 +314,13 @@ main(int argc, char **argv)
 		return -2;
 	}
 
-	reslen = read_static_content(&res);
-	if (reslen == -1) {
-		return 2;
-	}
-
 	struct event_base *base = event_base_new();
 
 	struct evconnlistener *listener;
 
 	event_base_dispatch(base);
 
+	puts("help");
 	listener = evconnlistener_new_bind(base, accept_conn, 0,
 		LEV_OPT_CLOSE_ON_FREE | LEV_OPT_REUSEABLE, 1024,
 		(struct sockaddr *)&addr, sizeof(addr));
